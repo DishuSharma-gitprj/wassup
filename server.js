@@ -1,73 +1,87 @@
-const express = require('express');
-const fs = require('fs');
-const bodyParser = require('body-parser');
-const app = express();
-const http = require('http').createServer(app);
+const socket = io();
+let username;
+let canSend = 0;
+let textarea = document.querySelector('#textarea');
+let messageArea = document.querySelector('.message__area');
 
-const Sentiment = require('sentiment'); // Import Sentiment library
+function sendMessage(message) {
+    let msg = {
+        user: username,
+        message: message.trim()
+    };
+    // Append 
+    appendMessage(msg, 'outgoing');
+    textarea.value = '';
+    scrollToBottom();
 
-const PORT = process.env.PORT || 3000;
-app.use(bodyParser.json());
-http.listen(PORT, () => {
-    console.log(`Listening on port ${PORT}`);
-});
+    // Send to server 
+    socket.emit('message', msg);
+}
 
-app.use(express.static(__dirname + '/public'));
+function appendMessage(msg, type) {
+    let mainDiv = document.createElement('div');
+    let className = type;
+    mainDiv.classList.add(className, 'message');
 
-app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/index.html');
-});
+    let markup = `
+        <h4>${msg.user}</h4>
+        <p>${msg.message}</p>
+        <p>Sentiment: ${msg.sentiment}</p>
+    `;
+    mainDiv.innerHTML = markup;
+    messageArea.appendChild(mainDiv);
+}
 
-// Socket 
-const io = require('socket.io')(http);
+function scrollToBottom() {
+    messageArea.scrollTop = messageArea.scrollHeight;
+}
 
-const sentiment = new Sentiment(); // Create a Sentiment instance
+async function checkUsername() {
+    do {
+        username = prompt('Please enter your username: ');
 
-io.on('connection', (socket) => {
-    console.log('Connected...')
-    socket.on('message', (msg) => {
-        try {
-            const sentimentResult = sentiment.analyze(msg.message); // Analyze sentiment of message
-            msg.sentimentScore = sentimentResult.score; // Add sentiment score to message object
-            socket.broadcast.emit('message', msg);
-        } catch (error) {
-            console.error('Error analyzing sentiment:', error);
-            msg.sentimentScore = undefined; // Set sentiment score to undefined
-            socket.broadcast.emit('message', msg);
+        if (username) {
+            const url = '/checkUser';
+            const data = {
+                username: username
+            };
+            const options = {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            };
+
+            try {
+                const response = await fetch(url, options);
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                const responseData = await response.json();
+                if (!responseData.isUnique) {
+                    username = '';
+                    alert("This username already exists");
+                } else {
+                    textarea.addEventListener('keyup', (e) => {
+                        if (e.key === 'Enter') {
+                            sendMessage(e.target.value);
+                        }
+                    });
+
+                    // Receive messages 
+                    socket.on('message', (msg) => {
+                        appendMessage(msg, 'incoming');
+                        scrollToBottom();
+                    });
+                    return;
+                }
+                console.log(responseData);
+            } catch (error) {
+                console.error('Error:', error);
+            }
         }
-    })
+    } while (!username || username === '');
+}
 
-})
-
-app.get('/reRender', (req, res) => {
-    res.sendFile(__dirname + '/index.html');
-})
-
-app.post('/checkUser', async (req, res) => {
-    try {
-        let username = req.body.username;
-
-        // Read existing usernames from file asynchronously
-        const data = await fs.promises.readFile('username.txt', 'utf8');
-        const usernames = data.split('\n');
-
-        // Check if username already exists
-        const exists = usernames.includes(username);
-        if (exists) {
-            res.json({
-                isUnique: false
-            });
-            return;
-        } else {
-            // Append username to file if it doesn't exist
-            await fs.promises.appendFile('username.txt', username + '\n', 'utf8');
-            res.json({
-                isUnique: true
-            });
-            return;
-        }
-    } catch (err) {
-        console.log("Some error occurs: " + err);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
-});
+checkUsername();
